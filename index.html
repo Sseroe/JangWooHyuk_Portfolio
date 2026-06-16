@@ -521,6 +521,29 @@
       });
     });
 
+
+    const getPreviewSourceList = (src) => {
+      if (!src) return [];
+      const list = [src];
+
+      // GitHub Pages는 대소문자를 구분합니다.
+      // repo 폴더가 Video인데 HTML이 video로 되어 있거나, 반대인 경우를 자동 보정합니다.
+      if (src.startsWith('video/')) list.push('Video/' + src.slice('video/'.length));
+      if (src.startsWith('Video/')) list.push('video/' + src.slice('Video/'.length));
+
+      return [...new Set(list)];
+    };
+
+    const setPreviewSource = (video, src) => {
+      if (!video || !src) return;
+      video.innerHTML = '';
+      const source = document.createElement('source');
+      source.src = src;
+      source.type = 'video/mp4';
+      video.appendChild(source);
+      try { video.load(); } catch (error) {}
+    };
+
     projectCards.forEach((card) => {
       const thumbSrc = card.dataset.thumb || '';
       const previewSrc = card.dataset.preview || '';
@@ -537,6 +560,9 @@
       }
 
       let previewVideo = null;
+      let previewSources = getPreviewSourceList(previewSrc);
+      let previewSourceIndex = 0;
+
       if (previewSrc) {
         previewVideo = document.createElement('video');
         previewVideo.className = 'project-video';
@@ -544,15 +570,20 @@
         previewVideo.defaultMuted = true;
         previewVideo.loop = true;
         previewVideo.playsInline = true;
-        previewVideo.preload = 'metadata';
+        previewVideo.preload = 'auto';
         previewVideo.setAttribute('muted', '');
         previewVideo.setAttribute('playsinline', '');
         previewVideo.setAttribute('webkit-playsinline', '');
 
-        const source = document.createElement('source');
-        source.src = previewSrc;
-        source.type = 'video/mp4';
-        previewVideo.appendChild(source);
+        setPreviewSource(previewVideo, previewSources[previewSourceIndex]);
+
+        previewVideo.addEventListener('error', () => {
+          if (previewSourceIndex < previewSources.length - 1) {
+            previewSourceIndex += 1;
+            setPreviewSource(previewVideo, previewSources[previewSourceIndex]);
+          }
+        });
+
         card.prepend(previewVideo);
       }
 
@@ -561,17 +592,40 @@
 
         const startTime = Number(card.dataset.previewStart || 0);
         card.classList.add('is-playing');
-
-        try {
-          if (startTime > 0) {
-            previewVideo.currentTime = startTime;
-          } else {
-            previewVideo.currentTime = 0;
-          }
-        } catch (error) {}
-
         previewVideo.muted = true;
-        previewVideo.play().catch(() => {});
+        previewVideo.defaultMuted = true;
+        previewVideo.playsInline = true;
+
+        const seekAndPlay = () => {
+          try {
+            if (startTime > 0 && (!previewVideo.duration || startTime < previewVideo.duration)) {
+              previewVideo.currentTime = startTime;
+            } else {
+              previewVideo.currentTime = 0;
+            }
+          } catch (error) {}
+
+          const playPromise = previewVideo.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(() => {
+              // 경로 대소문자 문제일 수 있으므로 대체 경로를 한 번 더 시도합니다.
+              if (previewSourceIndex < previewSources.length - 1) {
+                previewSourceIndex += 1;
+                setPreviewSource(previewVideo, previewSources[previewSourceIndex]);
+                previewVideo.addEventListener('loadedmetadata', seekAndPlay, { once:true });
+              } else {
+                card.classList.remove('is-playing');
+              }
+            });
+          }
+        };
+
+        if (previewVideo.readyState >= 1) {
+          seekAndPlay();
+        } else {
+          previewVideo.addEventListener('loadedmetadata', seekAndPlay, { once:true });
+          try { previewVideo.load(); } catch (error) {}
+        }
       };
 
       const stopPreview = () => {
